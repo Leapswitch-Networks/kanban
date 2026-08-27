@@ -1,0 +1,47 @@
+# Production stack for the Kanban app.
+# Run from the deploy/ directory:  docker compose up -d --build
+#
+# Requires a deploy/.env file (see .env.example) providing POSTGRES_PASSWORD.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kanban
+      POSTGRES_USER: kanban
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Applied only on first init (empty data dir), in filename order.
+      - ../backend/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../backend/db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kanban -d kanban"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://kanban:${POSTGRES_PASSWORD}@postgres:5432/kanban
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

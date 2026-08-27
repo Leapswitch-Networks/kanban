@@ -6,11 +6,20 @@ import Editor from "react-simple-wysiwyg";
 import type { ContentEditableEvent } from "react-simple-wysiwyg";
 import { Search } from "lucide-react";
 import { buildBoard, CARD_TYPE } from "./data/board";
-import type { CardContent } from "./data/board";
+import type { ApiCard, CardContent } from "./data/board";
 import namesData from "./data/namesData.json";
 import "./glass.css";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+
+type DropCardParams = {
+  cardId: string;
+  fromColumnId: string;
+  toColumnId: string;
+  taskAbove: string | null;
+  taskBelow: string | null;
+  position: number;
+};
 
 // Polls the FastAPI health endpoint; true only while it responds OK.
 function htmlToText(html: string) {
@@ -81,6 +90,7 @@ export default function App() {
   const [editorDescription, setEditorDescription] = useState("");
   const [isSavingTask, setIsSavingTask] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [stageUpdateError, setStageUpdateError] = useState("");
   const [showMemberSuggestions, setShowMemberSuggestions] = useState(false);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
   const memberSearchRef = useRef<HTMLDivElement | null>(null);
@@ -90,6 +100,22 @@ export default function App() {
     () => namesData.filter((name) => fuzzyMatches(name, memberSearch)).slice(0, 6),
     [memberSearch]
   );
+
+  useEffect(() => {
+    const loadCards = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/cards`);
+        if (!response.ok) throw new Error(`Load failed with status ${response.status}`);
+        const cards = (await response.json()) as ApiCard[];
+        setData(buildBoard(cards));
+        setStageUpdateError("");
+      } catch {
+        setStageUpdateError("Could not load tasks from the API.");
+      }
+    };
+
+    void loadCards();
+  }, []);
 
   useEffect(() => {
     const closeSuggestions = (event: PointerEvent) => {
@@ -238,6 +264,37 @@ export default function App() {
     } finally {
       setIsSavingTask(false);
     }
+  };
+
+  const updateTaskStage = async (move: DropCardParams) => {
+    if (move.fromColumnId === move.toColumnId) return;
+    const apiCardId = getApiCardId(move.cardId);
+    if (!apiCardId) return;
+
+    setStageUpdateError("");
+    try {
+      const response = await fetch(`${API_URL}/api/cards/${apiCardId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: getApiStage(move.toColumnId) }),
+      });
+      if (!response.ok) throw new Error(`Stage update failed with status ${response.status}`);
+    } catch {
+      setStageUpdateError("Could not save the new task stage to the API.");
+    }
+  };
+
+  const handleCardMove = (move: DropCardParams) => {
+    setData((d) =>
+      dropHandler(
+        move,
+        d,
+        () => {},
+        (target) => ({ ...target, totalChildrenCount: target.totalChildrenCount + 1 }),
+        (source) => ({ ...source, totalChildrenCount: source.totalChildrenCount - 1 })
+      )
+    );
+    void updateTaskStage(move);
   };
 
   const handleMemberSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -435,17 +492,7 @@ export default function App() {
               cardsGap={12}
               rootClassName="rkk-glass"
               onCardClick={(_e, card) => openTaskEditor(card as BoardItem)}
-              onCardMove={(move) =>
-                setData((d) =>
-                  dropHandler(
-                    move,
-                    d,
-                    () => {},
-                    (target) => ({ ...target, totalChildrenCount: target.totalChildrenCount + 1 }),
-                    (source) => ({ ...source, totalChildrenCount: source.totalChildrenCount - 1 })
-                  )
-                )
-              }
+              onCardMove={handleCardMove}
               allowListFooter={() => true}
               renderListFooter={(column) => (
                 <button
@@ -471,6 +518,7 @@ export default function App() {
       </div>
 
       <div className="api-status-container">
+        {stageUpdateError && <p className="stage-update-error">{stageUpdateError}</p>}
         <div
           className={`api-status ${apiConnected ? "api-status--online" : "api-status--offline"}`}
           title={apiConnected ? "Connected to API" : "API unreachable"}

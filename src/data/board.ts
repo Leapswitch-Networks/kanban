@@ -12,62 +12,22 @@ export interface CardContent {
   image?: string;
 }
 
-// A friendlier nested shape we author by hand, then flatten below.
-const columns: {
-  id: string;
+export interface ApiCard {
+  id: number;
   title: string;
-  cards: { id: string; title: string; content?: CardContent }[];
-}[] = [
-  {
-    id: "todo",
-    title: "Todo",
-    cards: [
-      { id: "c11", title: "Audit competitor onboarding flows" },
-      { id: "c12", title: "Draft Q3 design OKRs" },
-      { id: "c5", title: "Prioritize design backlog based on business needs" },
-    ],
-  },
-  {
-    id: "in-progress",
-    title: "In progress",
-    cards: [
-      {
-        id: "c1",
-        title: "Update design style guide with new color palette",
-        content: { labels: [{ text: "Design", color: "#6ea8fe" }] },
-      },
-      {
-        id: "c2",
-        title: "Conduct usability testing for mobile app prototype",
-        content: { labels: [{ text: "User Research", color: "#f7826b" }] },
-      },
-      { id: "c3", title: "Update the fonts from Comic Sans to Inter." },
-      { id: "c4", title: "Collaborate with content strategist on product copy" },
-    ],
-  },
-  {
-    id: "completed",
-    title: "Completed",
-    cards: [
-      { id: "c9", title: "Prepare assets for developer handoff" },
-      { id: "c10", title: "Review design system accessibility guidelines" },
-      {
-        id: "c6",
-        title: "Create a new landing page redesign",
-        content: { labels: [{ text: "Design", color: "#6ea8fe" }] },
-      },
-      {
-        id: "c7",
-        title: "Update the fonts on the app store screenshots.",
-        content: { labels: [{ text: "Marketing", color: "#f7826b" }] },
-      },
-    ],
-  },
-];
+  description: string | null;
+  stage: "todo" | "in_progress" | "completed";
+}
+
+const columns = [
+  { id: "todo", title: "Todo", apiStage: "todo" },
+  { id: "in-progress", title: "In progress", apiStage: "in_progress" },
+  { id: "completed", title: "Completed", apiStage: "completed" },
+] as const;
 
 export const CARD_TYPE = "card";
 
-export function buildBoard(): BoardData {
+export function buildBoard(cards: ApiCard[] = []): BoardData {
   const data: BoardData = {
     root: {
       id: "root",
@@ -79,22 +39,23 @@ export function buildBoard(): BoardData {
   };
 
   for (const col of columns) {
+    const columnCards = cards.filter((card) => card.stage === col.apiStage);
     data[col.id] = {
       id: col.id,
       title: col.title,
       parentId: "root",
-      children: col.cards.map((c) => c.id),
-      totalChildrenCount: col.cards.length,
+      children: columnCards.map((card) => `c${card.id}`),
+      totalChildrenCount: columnCards.length,
     };
-    for (const card of col.cards) {
-      data[card.id] = {
-        id: card.id,
+    for (const card of columnCards) {
+      data[`c${card.id}`] = {
+        id: `c${card.id}`,
         title: card.title,
         parentId: col.id,
         children: [],
         totalChildrenCount: 0,
         type: CARD_TYPE,
-        content: card.content ?? {},
+        content: { description: card.description ?? "" },
       };
     }
   }

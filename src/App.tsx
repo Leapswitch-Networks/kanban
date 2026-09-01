@@ -11,6 +11,37 @@ import namesData from "./data/namesData.json";
 import "./glass.css";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+const GOOGLE_CLIENT_ID =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID ??
+  "245835837222-qa1htil1kpgaiaq0u0ep9ts5vpls6hqa.apps.googleusercontent.com";
+const GOOGLE_CREDENTIAL_KEY = "googleCredential";
+const GOOGLE_USER_KEY = "googleUser";
+const EXPIRY_SAFETY_MS = 60_000;
+
+let googleInitialized = false;
+
+declare global {
+  interface Window {
+    google?: {
+      accounts?: {
+        id?: {
+          initialize: (config: unknown) => void;
+          renderButton: (element: HTMLElement, options: unknown) => void;
+          disableAutoSelect?: () => void;
+          revoke?: (hint: string, callback?: () => void) => void;
+        };
+      };
+    };
+  }
+}
+
+type GoogleUser = {
+  sub: string;
+  email: string;
+  name: string;
+  picture: string;
+  exp?: number;
+};
 
 type DropCardParams = {
   cardId: string;
@@ -26,6 +57,64 @@ function htmlToText(html: string) {
   const element = document.createElement("div");
   element.innerHTML = html;
   return element.textContent?.trim() ?? "";
+}
+
+function decodeJwt(token: string): GoogleUser | null {
+  try {
+    const payload = token.split(".")[1];
+    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    const obj = JSON.parse(decodeURIComponent(escape(json)));
+    return {
+      sub: obj.sub,
+      email: obj.email,
+      name: obj.name,
+      picture: obj.picture,
+      exp: typeof obj.exp === "number" ? obj.exp : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearGoogleSession() {
+  localStorage.removeItem(GOOGLE_CREDENTIAL_KEY);
+  localStorage.removeItem(GOOGLE_USER_KEY);
+}
+
+function loadSavedUser(): GoogleUser | null {
+  const credential = localStorage.getItem(GOOGLE_CREDENTIAL_KEY);
+  const rawUser = localStorage.getItem(GOOGLE_USER_KEY);
+  if (!credential || !rawUser) {
+    clearGoogleSession();
+    return null;
+  }
+
+  const decoded = decodeJwt(credential);
+  if (!decoded?.exp || decoded.exp * 1000 <= Date.now() + EXPIRY_SAFETY_MS) {
+    clearGoogleSession();
+    return null;
+  }
+
+  return decoded;
+}
+
+async function apiFetch(path: string, init: RequestInit = {}) {
+  const token = localStorage.getItem(GOOGLE_CREDENTIAL_KEY);
+  const response = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: {
+      ...(init.headers ?? {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+
+  if (response.status === 401) {
+    clearGoogleSession();
+    window.location.reload();
+    return new Promise<Response>(() => {});
+  }
+
+  return response;
 }
 
 function getApiCardId(cardId: string | number) {
@@ -82,6 +171,7 @@ function useApiHealth(intervalMs = 5000) {
 }
 
 export default function App() {
+  const [user, setUser] = useState<GoogleUser | null>(() => loadSavedUser());
   const [data, setData] = useState<BoardData>(() => buildBoard());
   const [selected, setSelected] = useState<BoardItem | null>(null);
   const [newCardColumnId, setNewCardColumnId] = useState<string | null>(null);
@@ -102,9 +192,50 @@ export default function App() {
   );
 
   useEffect(() => {
+    if (user) return;
+
+    const renderGoogleButton = () => {
+      const target = document.getElementById("google-btn");
+      const googleApi = window.google?.accounts?.id;
+      if (!target) return;
+      if (!googleApi) {
+        window.setTimeout(renderGoogleButton, 100);
+        return;
+      }
+
+      if (!googleInitialized) {
+        googleApi.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: (response: { credential: string }) => {
+            const signedInUser = decodeJwt(response.credential);
+            if (!signedInUser) return;
+            localStorage.setItem(GOOGLE_CREDENTIAL_KEY, response.credential);
+            localStorage.setItem(GOOGLE_USER_KEY, JSON.stringify(signedInUser));
+            setUser(signedInUser);
+          },
+        });
+        googleInitialized = true;
+      }
+
+      target.innerHTML = "";
+      googleApi.renderButton(target, {
+        theme: "outline",
+        size: "large",
+        shape: "pill",
+        text: "signin_with",
+        width: 280,
+      });
+    };
+
+    renderGoogleButton();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+
     const loadCards = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/cards`);
+        const response = await apiFetch("/api/cards");
         if (!response.ok) throw new Error(`Load failed with status ${response.status}`);
         const cards = (await response.json()) as ApiCard[];
         setData(buildBoard(cards));
@@ -115,7 +246,7 @@ export default function App() {
     };
 
     void loadCards();
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     const closeSuggestions = (event: PointerEvent) => {
@@ -195,7 +326,7 @@ export default function App() {
 
     try {
       if (newCardColumnId) {
-        const response = await fetch(`${API_URL}/api/cards`, {
+        const response = await apiFetch("/api/cards", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -239,7 +370,7 @@ export default function App() {
         return;
       }
 
-      const response = await fetch(`${API_URL}/api/cards/${apiCardId}`, {
+      const response = await apiFetch(`/api/cards/${apiCardId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title, description: editorDescription }),
@@ -273,7 +404,7 @@ export default function App() {
 
     setStageUpdateError("");
     try {
-      const response = await fetch(`${API_URL}/api/cards/${apiCardId}`, {
+      const response = await apiFetch(`/api/cards/${apiCardId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stage: getApiStage(move.toColumnId) }),
@@ -330,6 +461,19 @@ export default function App() {
     }
   };
 
+  const signOut = () => {
+    const email = user?.email;
+    setUser(null);
+    setSelected(null);
+    setNewCardColumnId(null);
+    setData(buildBoard());
+    clearGoogleSession();
+    window.google?.accounts?.id?.disableAutoSelect?.();
+    if (email && window.google?.accounts?.id?.revoke) {
+      window.google.accounts.id.revoke(email);
+    }
+  };
+
   const configMap = useMemo(
     () => ({
       [CARD_TYPE]: {
@@ -365,7 +509,7 @@ export default function App() {
 
   return (
     <div className="scene">
-      {!isEditingCard && (
+      {user && !isEditingCard && (
         <div className="search-container">
           <div className="member-search-wrap" ref={memberSearchRef}>
             <div className="board-search">
@@ -428,8 +572,23 @@ export default function App() {
         </div>
       )}
 
+      {user && (
+        <button className="signout-button" type="button" onClick={signOut} title={`Sign out ${user.email}`}>
+          {user.picture && <img src={user.picture} alt="" referrerPolicy="no-referrer" />}
+          <span>{user.name || user.email}</span>
+          <span className="signout-button-action">Sign out</span>
+        </button>
+      )}
+
       <div className={`board glass glass--medium ${isEditingCard ? "board--editor" : ""}`}>
-        {isEditingCard ? (
+        {!user ? (
+          <div className="signin-panel">
+            <h1 className="signin-title">Cloudpe Team Kanban Board</h1>
+            <div className="google-button-shell">
+              <div id="google-btn" />
+            </div>
+          </div>
+        ) : isEditingCard ? (
           <div className="task-editor-screen">
             <div className="task-editor-header">
               <button

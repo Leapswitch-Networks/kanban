@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Google Sign-In Implementation Plan — Cloudpe Kanban</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f172a;
+      --panel: rgba(255,255,255,.08);
+      --panel2: rgba(255,255,255,.12);
+      --text: rgba(255,255,255,.94);
+      --muted: rgba(255,255,255,.66);
+      --line: rgba(255,255,255,.16);
+      --accent: #7dd3fc;
+      --accent2: #fbbf24;
+      --code: #07111f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(900px 520px at 80% 10%, rgba(125,211,252,.22), transparent 60%),
+        radial-gradient(650px 480px at 10% 20%, rgba(251,191,36,.13), transparent 60%),
+        linear-gradient(135deg, #0f172a 0%, #111827 45%, #172033 100%);
+      min-height: 100vh;
+      line-height: 1.55;
+    }
+    header, main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+    header { padding: 46px 0 20px; }
+    .eyebrow { color: var(--accent); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 13px; }
+    h1 { margin: 10px 0 12px; font-size: clamp(34px, 6vw, 68px); line-height: .95; letter-spacing: -.055em; }
+    .subtitle { color: var(--muted); font-size: clamp(17px, 2vw, 22px); max-width: 850px; }
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 18px; padding: 20px 0 60px; }
+    section, .card {
+      grid-column: span 12;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 26px;
+      padding: 24px;
+      backdrop-filter: blur(22px) saturate(140%);
+      box-shadow: 0 24px 70px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.18);
+    }
+    @media (min-width: 860px) { .half { grid-column: span 6; } .third { grid-column: span 4; } }
+    h2 { margin: 0 0 14px; font-size: 26px; letter-spacing: -.02em; }
+    h3 { margin: 18px 0 8px; color: white; font-size: 18px; }
+    p { margin: 8px 0; }
+    ul, ol { margin: 10px 0 0; padding-left: 22px; }
+    li { margin: 7px 0; }
+    code { background: rgba(125,211,252,.14); color: #dff7ff; padding: 2px 6px; border-radius: 7px; }
+    pre {
+      overflow: auto;
+      padding: 16px;
+      border-radius: 16px;
+      background: var(--code);
+      border: 1px solid rgba(255,255,255,.12);
+      color: #d7eaff;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .ascii { color: #dbeafe; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .tag { display: inline-flex; border: 1px solid var(--line); background: var(--panel2); padding: 5px 10px; border-radius: 999px; color: var(--muted); font-size: 13px; margin: 3px; }
+    .flow { border-left: 3px solid var(--accent); padding-left: 14px; }
+    .warn { border-color: rgba(251,191,36,.35); background: rgba(251,191,36,.09); }
+    .ok { border-color: rgba(34,197,94,.35); background: rgba(34,197,94,.08); }
+    .conversation { display: grid; gap: 10px; }
+    .bubble { padding: 12px 14px; border-radius: 15px; border: 1px solid var(--line); background: rgba(255,255,255,.07); }
+    .bubble strong { color: var(--accent2); }
+    .footer { color: var(--muted); text-align: center; padding: 0 0 44px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="eyebrow">Implementation Plan</div>
+    <h1>Google Sign-In for Cloudpe Team Kanban Board</h1>
+    <p class="subtitle">Plan to pull Pekzho's Google Identity Services sign-in pattern into this React + FastAPI Kanban app, preserving the existing glass UI.</p>
+    <div>
+      <span class="tag">Frontend: React/Vite</span>
+      <span class="tag">Backend: FastAPI</span>
+      <span class="tag">Auth: Google ID Token</span>
+      <span class="tag">DB: Postgres</span>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section>
+      <h2>Goal</h2>
+      <ul>
+        <li>On app boot, check whether the user has a valid Google session.</li>
+        <li>If signed in, show the existing Kanban boards.</li>
+        <li>If not signed in, show the same main glass board container with no boards, a heading <code>Cloudpe Team Kanban Board</code>, and a Google sign-in button.</li>
+        <li>All Kanban API calls send <code>Authorization: Bearer &lt;Google ID token&gt;</code>.</li>
+        <li>Backend verifies the Google token and upserts new users on first authenticated request.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>High-level architecture</h2>
+      <pre class="ascii">Browser
+  |
+  | 1. loads app
+  v
+React App
+  |
+  |-- checks localStorage: googleCredential + googleUser + exp
+  |
+  |-- missing/expired -> render login state inside .board glass container
+  |-- valid           -> render Kanban board
+  |
+  | 2. user clicks Google button
+  v
+Google Identity Services
+  |
+  | returns Google ID token / JWT
+  v
+React App stores token + decoded profile
+  |
+  | 3. API calls include Authorization: Bearer JWT
+  v
+FastAPI backend
+  |
+  | verifies JWT signature/audience/expiry with Google
+  | upserts user into users table
+  v
+Cards API handlers</pre>
+    </section>
+
+    <section>
+      <h2>User flow</h2>
+      <pre class="ascii">┌────────────────────┐
+│ User opens app      │
+└─────────┬──────────┘
+          v
+┌─────────────────────────────┐
+│ loadSavedGoogleUser()       │
+│ - read localStorage         │
+│ - check JWT exp             │
+└──────────────┬──────────────┘
+               │
+   ┌───────────┴───────────┐
+   v                       v
+┌───────────────┐     ┌──────────────────┐
+│ valid session │     │ no/expired token │
+└───────┬───────┘     └────────┬─────────┘
+        v                      v
+┌───────────────┐     ┌──────────────────┐
+│ show Kanban   │     │ show login panel │
+│ fetch cards   │     │ heading + button │
+└───────┬───────┘     └────────┬─────────┘
+        v                      v
+┌───────────────┐     ┌──────────────────┐
+│ backend       │     │ GIS returns JWT  │
+│ verifies JWT  │     └────────┬─────────┘
+└───────────────┘              v
+                     ┌──────────────────┐
+                     │ save session     │
+                     │ render Kanban    │
+                     └──────────────────┘</pre>
+    </section>
+
+    <section class="half">
+      <h2>Backend plan</h2>
+      <ol>
+        <li>Add <code>google-auth&gt;=2.30</code> to <code>backend/requirements.txt</code>.</li>
+        <li>Add required env var <code>GOOGLE_CLIENT_ID</code>.</li>
+        <li>Extend <code>users</code> table with <code>google_sub</code>, <code>picture</code>, <code>last_seen_at</code>.</li>
+        <li>Add <code>upsert_google_user()</code> helper.</li>
+        <li>Add FastAPI dependency <code>current_user()</code> that verifies Google ID token.</li>
+        <li>Protect <code>/api/cards</code> CRUD routes with <code>Depends(current_user)</code>.</li>
+        <li>Add <code>GET /api/me</code> for auth smoke test and profile fetch.</li>
+      </ol>
+    </section>
+
+    <section class="half">
+      <h2>Frontend plan</h2>
+      <ol>
+        <li>Add Google Identity Services script to <code>index.html</code>.</li>
+        <li>Add <code>VITE_GOOGLE_CLIENT_ID</code>.</li>
+        <li>Add Google user/token state in <code>src/App.tsx</code>.</li>
+        <li>Add JWT decode + expiry check copied/adapted from Pekzho.</li>
+        <li>Add <code>apiFetch()</code> wrapper that sends bearer token and handles 401.</li>
+        <li>Only load cards when <code>user</code> exists.</li>
+        <li>Render signed-out login panel inside the existing <code>.board</code> glass container.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Signed-out UI target</h2>
+      <pre class="ascii">SIGNED OUT
+┌──────────────────────────────────────────────┐
+│ scene background stays same                  │
+│                                              │
+│   ┌──────────────────────────────────────┐   │
+│   │ board glass glass--medium            │   │
+│   │                                      │   │
+│   │     Cloudpe Team Kanban Board        │   │
+│   │                                      │   │
+│   │        [ Sign in with Google ]       │   │
+│   │                                      │   │
+│   └──────────────────────────────────────┘   │
+└──────────────────────────────────────────────┘
+
+SIGNED IN
+┌──────────────────────────────────────────────┐
+│ search members                               │
+│                                              │
+│   ┌──────────────────────────────────────┐   │
+│   │ Todo | In Progress | Completed       │   │
+│   │ cards...                             │   │
+│   └──────────────────────────────────────┘   │
+└──────────────────────────────────────────────┘</pre>
+    </section>
+
+    <section>
+      <h2>Example backend code</h2>
+      <pre><code>from fastapi import Depends, Header, HTTPException
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
+
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+
+def current_user(authorization: str = Header(default="")):
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        payload = id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            GOOGLE_CLIENT_ID,
+        )
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    if not payload.get("sub") or not payload.get("email"):
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    with pool.connection() as conn, conn.cursor() as cur:
+        return upsert_google_user(cur, payload)</code></pre>
+    </section>
+
+    <section>
+      <h2>Example frontend code</h2>
+      <pre><code>const GOOGLE_CREDENTIAL_KEY = "googleCredential";
+const GOOGLE_USER_KEY = "googleUser";
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+
+async function apiFetch(path: string, init: RequestInit = {}) {
+  const token = localStorage.getItem(GOOGLE_CREDENTIAL_KEY);
+
+  const response = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: {
+      ...(init.headers ?? {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+
+  if (response.status === 401) {
+    localStorage.removeItem(GOOGLE_CREDENTIAL_KEY);
+    localStorage.removeItem(GOOGLE_USER_KEY);
+    window.location.reload();
+    return new Promise&lt;Response&gt;(() =&gt; {});
+  }
+
+  return response;
+}</code></pre>
+    </section>
+
+    <section class="warn">
+      <h2>Credentials/config needed from you</h2>
+      <h3>Google OAuth Web Client ID</h3>
+      <pre><code>VITE_GOOGLE_CLIENT_ID=xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com
+GOOGLE_CLIENT_ID=xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com</code></pre>
+      <h3>Authorized JavaScript origins</h3>
+      <pre><code>http://localhost:5173
+http://127.0.0.1:5173
+http://localhost:4173
+http://127.0.0.1:4173
+https://your-production-kanban-domain.com</code></pre>
+      <h3>Backend env</h3>
+      <pre><code>DATABASE_URL=postgresql://kanban:kanban@localhost:5432/kanban
+GOOGLE_CLIENT_ID=xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com</code></pre>
+      <h3>Frontend env</h3>
+      <pre><code>VITE_API_URL=http://localhost:8000
+VITE_GOOGLE_CLIENT_ID=xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com</code></pre>
+      <h3>Optional access restriction</h3>
+      <pre><code>ALLOWED_GOOGLE_DOMAIN=cloudpe.com
+# or
+ALLOWED_GOOGLE_EMAILS=person1@cloudpe.com,person2@cloudpe.com</code></pre>
+    </section>
+
+    <section class="half ok">
+      <h2>Test cases</h2>
+      <ul>
+        <li><code>GET /api/health</code> without token returns 200.</li>
+        <li><code>GET /api/cards</code> without token returns 401.</li>
+        <li><code>GET /api/cards</code> with invalid token returns 401.</li>
+        <li><code>GET /api/me</code> with valid token returns user profile.</li>
+        <li>Empty localStorage shows login panel and no member search.</li>
+        <li>Successful Google sign-in stores token/profile and loads board.</li>
+        <li>Expired/invalid token clears session and returns to login panel.</li>
+        <li>Create/edit/move card sends Authorization header and succeeds.</li>
+      </ul>
+    </section>
+
+    <section class="half">
+      <h2>Implementation phases</h2>
+      <div class="flow">
+        <h3>Phase 1 — Backend</h3>
+        <p>Auth dependency, Google token verification, user upsert, protected card routes.</p>
+        <h3>Phase 2 — Frontend</h3>
+        <p>GIS script, token state, API wrapper, login panel, signed-in board rendering.</p>
+        <h3>Phase 3 — Optional</h3>
+        <p>Sign-out user pill/avatar and optional Cloudpe domain/email allowlist.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Conversation snippets</h2>
+      <div class="conversation">
+        <div class="bubble"><strong>You:</strong> If frontend already decodes Google token, why verify again?</div>
+        <div class="bubble"><strong>Me:</strong> Frontend decode is only for display. Anyone can edit localStorage. The backend must verify signature, audience, issuer, and expiry.</div>
+        <div class="bubble"><strong>You:</strong> Can we identify users by email?</div>
+        <div class="bubble"><strong>Me:</strong> Store email, but use <code>google_sub</code> as the real unique identity because email can change.</div>
+        <div class="bubble"><strong>You:</strong> Can the Google button be fully custom?</div>
+        <div class="bubble"><strong>Me:</strong> Safest is the official Google-rendered button placed inside our glass UI. A fully custom button may run into Google branding/policy constraints.</div>
+      </div>
+    </section>
+  </main>
+
+  <div class="footer">File: <code>google-signin-plan.html</code></div>
+</body>
+</html>

@@ -6,11 +6,19 @@
 -- users
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
-    id         BIGSERIAL PRIMARY KEY,
-    name       TEXT        NOT NULL,
-    email      TEXT        NOT NULL UNIQUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    id           BIGSERIAL PRIMARY KEY,
+    google_sub   TEXT UNIQUE,
+    name         TEXT        NOT NULL,
+    email        TEXT        NOT NULL UNIQUE,
+    picture      TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users (google_sub);
 
 -- ---------------------------------------------------------------------------
 -- cards  (stage = the kanban column the card lives in)
@@ -24,6 +32,7 @@ END$$;
 
 CREATE TABLE IF NOT EXISTS cards (
     id          BIGSERIAL PRIMARY KEY,
+    user_id     BIGINT      REFERENCES users (id) ON DELETE CASCADE,
     title       TEXT        NOT NULL,
     description TEXT,
     stage       card_stage  NOT NULL DEFAULT 'todo',
@@ -31,7 +40,9 @@ CREATE TABLE IF NOT EXISTS cards (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users (id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_cards_stage ON cards (stage);
+CREATE INDEX IF NOT EXISTS idx_cards_user_id ON cards (user_id);
 
 -- ---------------------------------------------------------------------------
 -- card_users  (join table: a card can be assigned to many users,
